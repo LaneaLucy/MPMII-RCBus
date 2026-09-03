@@ -1,0 +1,569 @@
+; =====================================================================
+; LDRBIOS für MPMLDR unter RomWBW / HBIOS
+; Einschränkung: Muss zwischen 1700H und 19FFH liegen (max. 768 Bytes)
+; =====================================================================
+
+FALSE	.EQU	0
+TRUE	.EQU	~FALSE
+
+DEBUG	.EQU	FALSE
+
+;
+; CPU FAMILY TYPES
+;
+CPU_NONE	.EQU	0		; NO CPU TYPE DEFINED
+CPU_Z80		.EQU	1		; Z80 FAMILY
+CPU_Z180	.EQU	2		; Z180 FAMILY
+CPU_Z280	.EQU	3		; Z280 FAMILY
+CPU_EZ80	.EQU	4		; eZ80 FAMILY
+CPUFAM		.EQU    CPU_Z180
+
+        .ORG     1700H
+
+; --- HBIOS API ---
+HBIOS_CALL:  .EQU $FFF0       ; RomWBW HBIOS Call address
+
+; --- BIOS Jump Table ---
+        JP     BOOT        ; Cold Start
+        JP     WBOOT       ; Warm Start
+        JP     CONST       ; *Console Status
+        JP     CONIN       ; Console Input
+        JP     CONOUT      ; *Console Output
+        JP     LIST        ; Printer Output
+        JP     PUNCH       ; Paper Tape Punch
+        JP     READER      ; Paper Tape Reader
+        JP     HOME        ; *Track 0 suchen
+        JP     SELDSK      ; *Laufwerk wählen
+        JP     SETTRK      ; *Track setzen
+        JP     SETSEC      ; *Sektor setzen
+        JP     SETDMA      ; *DMA-Zieladresse setzen
+        JP     READ        ; *Sektor LESEN
+        JP     WRITE       ; Sektor Schreiben
+        JP     LISTST      ; Printer Status
+        JP     SECTRAN     ; *Sektorentranslation
+
+; --- Lokaler Speicher (Variablen im sicheren Bereich des BIOS) ---
+DISK_NUM:   	.DB  0       ; Gewähltes Laufwerk (HBIOS-Index, z.B. 0=A:)
+TRACK_NUM:  	.DW  0       ; Aktueller Track
+SECTOR_NUM: 	.DW  0       ; Aktueller Sektor
+DMA_ADDR:   	.DW  0       ; Aktuelle Zieladresse im RAM
+LAST_PHYS_SEC:  .DW  0FFFFH
+
+; --- Dummys und nicht benötigte Funktionen ---
+BOOT:
+WBOOT:
+LIST:
+PUNCH:
+READER:
+WRITE:
+LISTST:
+        RET             ; Einfach zurückspringen
+
+
+#IF DEBUG
+
+;Stolen from RomWBW/HBIOS/util.asm
+   
+;
+; PRINT THE HEX BYTE VALUE IN A
+;
+PRTHEXBYTE:
+	PUSH	AF
+	PUSH	DE
+	CALL	HEXASCII
+	LD	A,D
+	CALL	COUT
+	LD	A,E
+	CALL	COUT
+	POP	DE
+	POP	AF
+	RET
+;
+; PRINT THE HEX WORD VALUE IN BC
+;
+PRTHEXWORD:
+	PUSH	AF
+	LD	A,B
+	CALL	PRTHEXBYTE
+	LD	A,C
+	CALL	PRTHEXBYTE
+	POP	AF
+	RET
+;
+; CONVERT BINARY VALUE IN A TO ASCII HEX CHARACTERS IN DE
+;
+HEXASCII:
+	LD	D,A
+	CALL	HEXCONV
+	LD	E,A
+	LD	A,D
+	RLCA
+	RLCA
+	RLCA
+	RLCA
+	CALL	HEXCONV
+	LD	D,A
+	RET
+;
+; CONVERT LOW NIBBLE OF A TO ASCII HEX
+;
+HEXCONV:
+	AND	0FH	     ;LOW NIBBLE ONLY
+	ADD	A,90H
+	DAA
+	ADC	A,40H
+	DAA
+	RET
+#ENDIF
+
+
+; =====================================================================
+; KONSOLEN-FUNKTIONEN (Nutzen RomWBW CIO)
+; =====================================================================
+
+CONST:
+        LD      B, 02H      ; Subfunktion: CIOIST
+        LD      C, 0        ; Console 0
+        CALL    HBIOS_CALL  ; HBIOS call
+        OR      A           ; Setzt Zero-Flag
+        RET     Z           ; Wenn keine Zeichen (A=0) dann zero flag und return
+        OR      0FFH         ; (A=FF wenn Zeichen)
+        RET
+
+CONIN:
+        LD      B, 00H      ; Subfunktion: CIOIN
+        LD      C, 0        ; Console 0
+        CALL    HBIOS_CALL  ; Wartet und liefert Zeichen in E
+        LD      A, E        ; CP/M erwartet das Zeichen in A (stimmt)
+        RET
+        
+CONOUT:
+        LD      E, C        ; CP/M übergibt das Zeichen in C (stimmt), HBIOS erwartet das Zeichen in E (stimmt)
+        LD      C, 0        ; Console 0
+        LD      B, 01H      ; Subfunktion: CIOOUT
+        CALL    HBIOS_CALL
+        RET
+
+COUT:
+        PUSH    BC
+        PUSH    DE
+        PUSH    HL
+        LD      C, A
+        CALL    CONOUT
+        POP     HL
+        POP     DE
+        POP     BC
+        RET
+
+; =====================================================================
+; DISKETTEN-FUNKTIONEN (Nutzen RomWBW DIO)
+; =====================================================================
+
+HOME:
+;        call PRTSTRD
+;        .db "HOME\r\n$"
+        LD      BC, 0       ; HOME setzt Track einfach auf 0
+        ; Fällt durch in SETTRK...
+
+SETTRK:
+;        call PRTSTRD
+;        .db "SETTRK\r\n$"
+        LD      (TRACK_NUM), BC ; Track wird von CP/M in BC übergeben (stimmt)
+        RET
+
+SETSEC:
+;        call PRTSTRD
+;        .db "SETSEC\r\n$"
+        LD      (SECTOR_NUM), BC ; Sektor wird von CP/M in BC übergeben (stimmt)
+        RET
+
+SECTRAN:
+;        call PRTSTRD
+;        .db "SECTRAN\r\n$"
+        LD      H, B
+        LD      L, C
+        RET
+        
+#IF DEBUG
+        call PRTSTRD
+        .db "SECTOR_LOGICAL\r\n$"
+;        LD      BC, (SECTOR_NUM)
+        call PRTHEXWORD
+        call PRTSTRD
+        .db "\r\n$"
+#ENDIF
+        
+        LD		A, C
+        SRL A
+        SRL A
+        LD      H, B
+        LD      L, A
+        
+#IF DEBUG
+        call PRTSTRD
+        .db "SECTOR_PHYSICAL\r\n$"
+        LD      B, H
+        LD      C, L
+        call PRTHEXWORD
+        call PRTSTRD
+        .db "\r\n$"
+#ENDIF
+        RET
+
+SETDMA:
+;        call PRTSTRD
+;        .db "SETDMA\r\n$"
+        LD      (DMA_ADDR), BC   ; Adresse wird von CP/M in BC übergeben (stimmt)
+        RET
+
+SELDSK:
+;        push bc
+;        call PRTSTRD
+;        .db "SELDSK\r\n$"
+;        pop bc
+        
+        ; CP/M übergibt Laufwerk in C (0=A:, 1=B:, etc.) (stimmt) (CP/M Laufwerk's Buchstaben, nicht HBIOS Nummern!!!!!!!!!!!!)
+        LD      A, C
+        ;DEC     A
+        LD		A, 2             ; !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! DEBUG DEBUG DEBUG REMOVE REMOVE REMOVE
+        LD      (DISK_NUM), A
+        
+;        call PRTSTRD
+;        .db "DISK_NUM\r\n$"
+;        LD       A, (DISK_NUM)
+;        call PRTHEXBYTE
+;        call PRTSTRD
+;        .db "\r\n$"
+        
+;        ; HBIOS Laufwerk-Status prüfen/initialisieren
+;        LD      B, 10H           ; Subfunktion: DIOSTATUS
+;        ;LD      C, A             ; Laufwerksnummer an HBIOS übergeben; kann weggelassen werden, da schon im richtigen register
+;        CALL    HBIOS_CALL
+;        OR      A                ; Setzt Zero-Flag
+;        JR      Z, SELDSKZ       ; Wenn Status OK (A=0) dann zero flag und jump
+;        LD      HL, 0            ; Fehler signalisieren 
+;        RET
+;SELDSKZ:
+
+        LD      HL, DPBASE       ; Disk Parameter Header base address setzen
+        RET						 ; #########################################################################   DEBUG REMOVE REMOVE REMOVE   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+		LD      A, (DISK_NUM)
+		OR      A
+        RET     Z
+        LD      HL, 0            ; Fehler signalisieren 
+        RET
+
+
+; address 17DF to 17E4 got changed by something which broke code, so here is a fill to avoid changing address space. here is 17DE
+;        .FILL 7, 00
+
+
+; ---------------------------------------------------------------------
+; READ: Liest exakt einen Sektor via HBIOS in die DMA-Adresse
+; ---------------------------------------------------------------------
+READ:
+#IF DEBUG
+        call PRTSTRD
+        .db "READ\r\n$"
+        
+        call PRTSTRD
+        .db "DISK_NUM              $"
+        LD      A, (DISK_NUM)
+        call PRTHEXBYTE
+        call PRTSTRD
+        .db "\r\n$"
+        
+        call PRTSTRD
+        .db "TRACK_NUM             $"
+        LD      BC, (TRACK_NUM)
+        call PRTHEXWORD
+        call PRTSTRD
+        .db "\r\n$"
+        
+        
+        call PRTSTRD
+        .db "SECTOR_LOGICAL        $"
+        LD      BC, (SECTOR_NUM)
+        call PRTHEXWORD
+        call PRTSTRD
+        .db "\r\n$"
+#ENDIF
+        
+        ; Physical Sector = Logical Sector / BSH (4)
+        LD      BC, (SECTOR_NUM)
+        LD		A, C
+        SRL A		; A / 2
+        SRL A		; A / 2 (two times equal / 4)
+        LD      C, A
+        
+#IF DEBUG
+        call PRTSTRD
+        .db "SECTOR_PHYSICAL       $"
+        ;LD      B, H
+        ;LD      C, L
+        call PRTHEXWORD
+        call PRTSTRD
+        .db "\r\n$"
+        
+        PUSH	BC
+        call PRTSTRD
+        .db "DMA_ADDR              $"
+        LD      BC, (DMA_ADDR)
+        call PRTHEXWORD
+        call PRTSTRD
+        .db "\r\n$"
+        POP		BC
+#ENDIF
+        
+        ; Sector Cache: if physical sector same as last read physical sector, jump to READ_OK
+        ;TODO: also check for same track and head ######################################################################### TODO TODO TODO !!!!!!!! TODO TODO TODO !!!!!!!!
+#IF DEBUG
+        call PRTSTRD
+        .db "CACHE                 $"
+#ENDIF
+        LD		HL, (LAST_PHYS_SEC)
+        LD		A, H
+        CP		B
+        JR      NZ, MISS		; Cache MISS
+        LD		A, L
+        CP		C
+        JR      NZ, MISS		; Cache MISS
+#IF DEBUG
+        call PRTSTRD
+        .db "HIT\r\n$"
+#ENDIF
+        JP		READ_OK			; Cache HIT
+        
+MISS:	LD      (LAST_PHYS_SEC), BC
+#IF DEBUG
+        call PRTSTRD
+        .db "MISS\r\n$"
+#ENDIF
+        
+        ; ########## SEEK ##########
+SEEK:   
+		;
+		;LD      D, 0             	; Head 0, CHS Mode
+        ;LD      BC, (SECTOR_NUM)
+        LD      E, C
+        LD      HL, (TRACK_NUM)
+        LD		A, 0
+        SRL		H
+        RR		L					; HL / 2
+        RLA							; First bit off HL is now in A
+#IF DEBUG
+        call PRTSTRD
+        .db "TRACK_PHYSICAL        $"
+        LD      B, H
+        LD      C, L
+        call PRTHEXWORD
+        call PRTSTRD
+        .db "\r\n$"
+#ENDIF
+        LD		D, A
+        LD      A, (DISK_NUM)
+        LD      C, A
+        LD      B, 12H
+        CALL    HBIOS_CALL
+        
+#IF DEBUG
+        PUSH AF
+        call PRTSTRD
+        .db "SEEK_STATUS:          $"
+        POP AF
+        call PRTHEXBYTE
+        call PRTSTRD
+        .db "\r\n$"
+#ENDIF
+        
+        
+		; ########## READ ###########
+;        call PRTSTRD
+;        .db "READ2\r\n$"
+        
+        LD      B, 0F3H     ; Subfunktion: SYSGETBNK
+        CALL    HBIOS_CALL
+        LD      D, C        ; Buffer Bank ID
+
+        LD      BC, DMA_ADDR_TEMP
+        LD      H, B        ; HBIOS erwartet DMA-Adresse im Registerpaar HL
+        LD      L, C
+        
+        LD      A, (DISK_NUM)
+        LD      C, A        ; HBIOS Unit Number (Laufwerk)
+        
+        LD      E, 1        ; Anzahl der zu lesenden Blöcke (1 Sektor = 128/512 Bytes)
+        LD      B, 13H      ; Subfunktion: DIOREAD
+        CALL    HBIOS_CALL
+        
+        ; HBIOS liefert im Register A den Status (0 = OK) (stimmt)
+        ; CP/M erwartet 0 bei Erfolg, 1 bei Fehler
+        OR      A
+        JR      Z, READ_OK
+        
+#IF DEBUG
+        call PRTSTRD
+        .db "READ_FAIL             $"
+        call PRTHEXBYTE
+        call PRTSTRD
+        .db "\r\n$"
+#ENDIF
+        
+        LD      A, 1        ; Errorcode for CP/M
+        RET
+READ_OK:
+        ;XOR     A           ; 0 Success
+#IF DEBUG
+        call PRTSTRD
+        .db "READ_OK\r\n$"
+#ENDIF
+        
+        ; Physical Sector Part = Logical Sector AND 3
+        LD		BC, (SECTOR_NUM)
+        LD		A, C
+        AND 	03H
+        ;LD      C, A
+        
+#IF DEBUG
+        call PRTSTRD
+        .db "SECTOR_PHYSICAL_PART  $"
+        ;LD		A, C
+        call PRTHEXBYTE
+        call PRTSTRD
+        .db "\r\n$"
+#ENDIF
+        
+        ; copy sector part C from DMA_ADDR_TEMP to DMA_ADDR
+        LD		H, 0
+        LD		L, A
+        ADD		HL,HL
+        ADD		HL,HL
+        ADD		HL,HL
+        ADD		HL,HL
+        ADD		HL,HL
+        ADD		HL,HL
+        ADD		HL,HL		; DMA_ADDR_TEMP Offset = HL = A * (2 ^ 7) TODO: Optimize
+        ;SRL	L
+        ;RRA
+        ;LD		L, A
+        ;LD		A, H
+        ;RRA				; seems wrong
+        ;LD		H, A		; from google ai, but did not understand yet
+        
+        LD		DE, DMA_ADDR_TEMP
+        ADD		HL, DE				; HL = DMA_ADDR_TEMP address + offset
+        
+        ; copy (LDIR) from HL to DE, exactly 128 (BC) bytes
+        LD		DE, (DMA_ADDR)
+        LD		BC, 128
+        LDIR
+        
+        
+#IF DEBUG
+        call PRTSTRD
+        .db "READ:                 $"
+        LD      HL, (DMA_ADDR)
+        LD      A, (HL)
+        call PRTHEXBYTE
+        INC     HL
+        LD      A, (HL)
+        call PRTHEXBYTE
+        call PRTSTRD
+        .db "\r\n\n$"
+#ENDIF
+        
+        LD		A, 0		; DAS HIER HAT GEFEHLT !!!!!!!!!!!!!!!!
+        RET
+
+
+   
+#IF DEBUG
+;Stolen from RomWBW/HBIOS/util.asm
+   
+;
+; PRINT A STRING AT ADDRESS SPECIFIED IN HL
+; STRING MUST BE TERMINATED BY '$'
+; USAGE:
+;   LD	HL,MYSTR
+;   CALL PRTSTR
+;   ...
+;   MYSTR: .DB  "HELLO$"
+;
+PRTSTR:
+	LD	A,(HL)
+	INC	HL
+	CP	'$'
+	RET	Z
+	CALL	COUT
+	JR	PRTSTR
+;
+; PRINT A STRING DIRECT: REFERENCED BY POINTER AT TOP OF STACK
+; STRING MUST BE TERMINATED BY '$'
+; USAGE:
+;   CALL PRTSTRD
+;   .DB  "HELLO$"
+;   ...
+;
+PRTSTRD:
+	EX	(SP),HL
+	PUSH	AF
+	CALL	PRTSTR
+	POP	AF
+	EX	(SP),HL
+	RET
+#ENDIF
+
+
+DPBASE:
+		.DW	0000H	; XLT
+		.DW	0
+		.DW	0
+		.DW	0
+		.DW	DIRBUF
+		.DW	DPB_FD144
+		.DW	CSV
+		.DW	ALV
+
+;Stolen from RomWBW/CBIOS/cbios.asm;2045
+   
+;__________________________________________________________________________________________________
+;
+; IBM 1.44MB 3.5" FLOPPY DRIVE, 80 TRKS, 72 SECS/TRK, 512 BYTES/SEC
+; BLOCKSIZE (BLS) = 2K, DIRECTORY ENTRIES = 256
+;
+DPB_FD144:
+	.DW	72		; SPT: SECTORS PER TRACK
+	.DB	4		; BSH: BLOCK SHIFT FACTOR
+	.DB	15		; BLM: BLOCK MASK
+	.DB	0		; EXM: EXTENT MASK
+	.DW	710		; DSM: TOTAL STORAGE IN BLOCKS - 1 BLK = ((1,440K - 18K OFF) / 2K BLS) - 1 = 710
+	.DW	255		; DRM: DIR ENTRIES - 1 = 256 - 1 = 255
+	.DB	11110000B	; AL0: DIR BLK BIT MAP, FIRST BYTE
+	.DB	00000000B	; AL1: DIR BLK BIT MAP, SECOND BYTE
+	.DW	64		; CKS: DIRECTORY CHECK VECTOR SIZE = 256 / 4
+	.DW	2		; OFF: RESERVED TRACKS = 2 TRKS * (512 B/SEC * 72 SEC/TRK) = 18K
+
+
+
+CSV:	.DB 0
+	
+		.ORG ($ + 64)
+
+ALV:	.DB 0
+	
+		.ORG ($ + 90)
+
+DIRBUF:	.DB 0
+	
+		.ORG ($ + 128)
+
+DMA_ADDR_TEMP:	.DB 0
+	
+		.ORG ($ + 512)
+
+
+
+
+
+        .END
+
